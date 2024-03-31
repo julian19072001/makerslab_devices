@@ -130,7 +130,7 @@ void drawSplash(){
 /* Show all the time slots */
 void drawTimes(){
   for(int i = 0; i < 20; i++){
-    snprintf(buffer, sizeof(buffer), "%s-", timeSlot[i]);
+    snprintf(buffer, sizeof(buffer), "%s -", timeSlot[i]);
     drawOnLine(buffer, i, 0);
   }
 
@@ -204,7 +204,7 @@ void drawReservations(){
 
     for(int i = 0; i < TIMESLOTS; i++){
       if(!strcmp(booking["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
-        drawOnLine(booking["full_name"].as<String>().substring(0).c_str(), i, 49);
+        drawOnLine(booking["full_name"].as<String>().substring(0).c_str(), i, 56);
         booked[i] = true;
         break;
       }
