@@ -15,7 +15,7 @@
 #define UNCOLORED   1
 
 #define SPLASH_TIME 5   /* Time the splashscreen shows in seconds */
-#define UPDATE_TIME 10  /* Time between updates in seconds */
+#define UPDATE_TIME 120  /* Time between updates in seconds */
 
 #define SPLASH_HEADER   "Reserveringen"
 #define DEVICE          "Laser 3 98 x 158 cm"  /* Name of device (Make sure its the same as in the supersaas schedule) */
@@ -168,7 +168,7 @@ void drawReservations(){
   static int oldTimeslot;
   int currentTimeslot = 0;
 
-  int currentTime = timeToInt(getTime());
+  int currentTime = timeToInt(getTime("time"));
   for(int i = 0; i < TIMESLOTS+1; i++){
     currentTimeslot = i + 1;
     if(currentTime >= timeToInt(timeSlot[i]) && currentTime <= (timeToInt(timeSlot[i + 1]) -1)) break;
@@ -237,7 +237,7 @@ void drawReservations(){
   epd.Sleep();
 }
 
-String getTime(){
+String getTime(String type){
   int httpResponseCode;
   String payload = "0";
   
@@ -252,7 +252,8 @@ String getTime(){
 
   if(error) return "0";
 
-  snprintf(buffer, sizeof("00:00"), "%s", doc["datetime"].as<String>().substring(11).c_str());
+  if(type == "time") snprintf(buffer, sizeof("00:00"), "%s", doc["datetime"].as<String>().substring(11).c_str());
+  else if(type == "day") snprintf(buffer, sizeof("0"), "%s", doc["day_of_week"].as<String>().c_str());
 
   return buffer;
 }
