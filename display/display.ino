@@ -69,6 +69,9 @@ void setup() {
 
   delay(TO_SECONDS(SPLASH_TIME));
 
+  String day = getTime("day");
+  if(day.equals("2") || day.equals("3")) timeSlot[TIMESLOTS+1] == "17:30";
+
   /* Display an empty schedule */
   epd.ClearFrame();
   drawTimes();
@@ -78,7 +81,6 @@ void setup() {
 
 void loop() {
   drawReservations();
-  
   delay(TO_SECONDS(UPDATE_TIME));
 }
 
