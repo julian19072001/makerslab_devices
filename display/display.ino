@@ -18,7 +18,7 @@
 #define UPDATE_TIME 120  /* Time between updates in seconds */
 
 #define SPLASH_HEADER   "Reserveringen"
-#define DEVICE          "Laser 3 98 x 158 cm"  /* Name of device (Make sure its the same as in the supersaas schedule) */
+#define DEVICE          "Printer-snijplotter"  /* Name of device (Make sure its the same as in the supersaas schedule) */
 
 #define TIME_API        "https://worldtimeapi.org/api/timezone/Europe/Amsterdam"
 
@@ -69,8 +69,11 @@ void setup() {
 
   delay(TO_SECONDS(SPLASH_TIME));
 
-  String day = getTime("day");
-  if(day.equals("2") || day.equals("3")) timeSlot[TIMESLOTS+1] == "17:30";
+  int day = getTime("day")[0] - '0';
+  Serial.println(day);
+  Serial.println(timeSlot[TIMESLOTS+1]);
+  if(day == 2 || day == 3) timeSlot[TIMESLOTS+1] = "17:30";
+  Serial.println(timeSlot[TIMESLOTS+1]);
 
   /* Display an empty schedule */
   epd.ClearFrame();
@@ -177,12 +180,9 @@ void drawReservations(){
     currentTimeslot = 0;
   }
 
-  static String oldReservationData;
+  if(oldTimeslot == currentTimeslot) return;
+
   String reservationData = getReservationData();
-
-  if(!strcmp(reservationData.c_str(), oldReservationData.c_str()) && oldTimeslot == currentTimeslot) return;
-
-  oldReservationData = reservationData;
   oldTimeslot = currentTimeslot;
 
   epd.Init();
@@ -206,8 +206,10 @@ void drawReservations(){
 
     for(int i = 0; i < TIMESLOTS; i++){
       if(!strcmp(booking["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
-        drawOnLine(booking["full_name"].as<String>().substring(0).c_str(), i, 56);
-        booked[i] = true;
+        for(int j = 0; timeToInt(booking["finish"].as<String>().substring(11).c_str()) > timeToInt(timeSlot[i + j].c_str()) + 1; j++){
+          drawOnLine(booking["full_name"].as<String>().substring(0).c_str(), i + j, 56);
+          booked[i] = true;
+        }
         break;
       }
     }
