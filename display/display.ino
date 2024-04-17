@@ -3,6 +3,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <AsyncMqtt_Generic.h>
+#include <Ticker.h>
 #include "epd4in2.h"
 #include "epdpaint.h"
 
@@ -15,10 +17,10 @@
 #define UNCOLORED   1
 
 #define SPLASH_TIME 5   /* Time the splashscreen shows in seconds */
-#define UPDATE_TIME 120  /* Time between updates in seconds */
+#define UPDATE_TIME 60  /* Time between updates in seconds */
 
 #define SPLASH_HEADER   "Reserveringen"
-#define DEVICE          "Printer-snijplotter"  /* Name of device (Make sure its the same as in the supersaas schedule) */
+#define DEVICE          "RISO-printer"  /* Name of device (Make sure its the same as in the supersaas schedule) */
 
 #define TIME_API        "https://worldtimeapi.org/api/timezone/Europe/Amsterdam"
 
@@ -29,14 +31,26 @@
 #define TIMESLOTS 18    /* Number of different timeslots that can be booked */
 #define BOOKINGS 100   /* Number of bookings you want to request. Make sure it is more or equal to (18*Number of devices) */ 
 
+#define MQTT_HOST   "data.cleanmobilityhva.nl"
+#define MQTT_PORT   20006
+#define MQTT_USER   "make-sense"
+#define MQTT_PASSWORD "MakeSense2024"
+#define MQTT_TOPIC "webhook_data"
+
 Epd epd;
 HTTPClient http; 
 WiFiClientSecure client;
+AsyncMqttClient mqttClient;
+Ticker mqttReconnectTimer;
 
 unsigned char image[1250];
 Paint paint(image, 32, 300);    //width should be the multiple of 8, This is needed because of the way data gets send to the screen over SPI
 
 char buffer[BUFFER_SIZE];
+
+uint8_t booked[TIMESLOTS];
+String reservations[TIMESLOTS];
+int currentTimeslot = 0;
 
 String timeSlot[TIMESLOTS+2] = {"08:30","08:55","09:20","09:45","10:20","10:45","11:10","11:35","12:00","12:25",
                                 "12:50","13:15","13:40","14:05","14:30","14:55","15:20","15:45","16:10","16:30"};
@@ -59,6 +73,18 @@ void setup() {
   client.setInsecure(); // Set client to accept insecure connections (for HTTPS)
   WiFi.mode(WIFI_STA);
   wm.autoConnect(DEVICE,"Password"); // password protected ap
+
+  mqttClient.onConnect(onMqttConnect);
+  mqttClient.onDisconnect(onMqttDisconnect);
+  mqttClient.onSubscribe(onMqttSubscribe);
+  mqttClient.onUnsubscribe(onMqttUnsubscribe);
+  mqttClient.onMessage(onMqttMessage);
+
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
+  mqttClient.setClientId(DEVICE);
+
+  connectToMqtt();
 
   epd.Init();
 
@@ -83,9 +109,227 @@ void setup() {
 } 
 
 void loop() {
-  drawReservations();
+  saveReservations();
   delay(TO_SECONDS(UPDATE_TIME));
 }
+
+/* Function to perform HTTP GET request */
+String getReservationData() {
+  int httpResponseCode;
+  String payload = "0";
+
+  char address[BUFFER_SIZE];
+  snprintf(address, sizeof(address), "%s%s.json?api_key=%s&today=true&limit=%d", API_URL, SCHEDULE_ID, API_KEY, BOOKINGS);
+  
+  http.begin(client, address); // Initialize an HTTP request
+
+  httpResponseCode = http.GET(); // Send an HTTP GET request with data
+  payload = http.getString(); // Get the response from the server
+  http.end(); // Close the HTTP connection
+  return payload;
+}
+
+/* Put all the reservations on screen */
+void saveReservations(){ 
+  static int oldTimeslot;
+
+  int currentTime = timeToInt(getTime("time"));
+  for(int i = 0; i < TIMESLOTS+1; i++){
+    currentTimeslot = i + 1;
+    if(currentTime >= timeToInt(timeSlot[i]) && currentTime <= (timeToInt(timeSlot[i + 1]) -1)) break;
+    currentTimeslot = 0;
+  }
+
+  if(oldTimeslot == currentTimeslot) return;
+
+  String reservationData = getReservationData();
+  oldTimeslot = currentTimeslot;
+
+  epd.Init();
+  epd.ClearFrame();
+  drawTimes();
+
+  DynamicJsonDocument doc(JSON_DOCUMENT_LENGTH);
+  DeserializationError error = deserializeJson(doc, reservationData);
+
+  if(error) return;
+    
+  JsonArray bookings = doc["bookings"];
+
+  if(bookings.size() == 0) return;
+
+  for(int i = 0; i < TIMESLOTS; i++) booked[i] = false;
+
+  for(JsonObject booking : bookings){
+    if(booking["res_name"].as<String>().substring(0) != DEVICE) continue;
+
+    for(int i = 0; i < TIMESLOTS; i++){
+      if(!strcmp(booking["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
+        for(int j = 0; timeToInt(booking["finish"].as<String>().substring(11).c_str()) > timeToInt(timeSlot[i + j].c_str()) + 1; j++){
+          reservations[i + j] = booking["full_name"].as<String>().substring(0);
+          booked[i + j] = true;
+        }
+        break;
+      }
+    }
+    
+    yield();
+  }
+
+  refreshScreen();
+}
+
+String getTime(String type){
+  int httpResponseCode;
+  String payload = "0";
+  
+  http.begin(client, TIME_API); // Initialize an HTTP request
+
+  httpResponseCode = http.GET(); // Send an HTTP GET request with data
+  payload = http.getString(); // Get the response from the server
+  http.end(); // Close the HTTP connection
+
+  DynamicJsonDocument doc(JSON_DOCUMENT_LENGTH);
+  DeserializationError error = deserializeJson(doc, payload);
+
+  if(error) return "0";
+
+  if(type == "time") snprintf(buffer, sizeof("00:00"), "%s", doc["datetime"].as<String>().substring(11).c_str());
+  else if(type == "day") snprintf(buffer, sizeof("0"), "%s", doc["day_of_week"].as<String>().c_str());
+  else if(type == "date") snprintf(buffer, sizeof("00:00"), "%s", doc["datetime"].as<String>().substring(0, 9).c_str());
+
+  return buffer;
+}
+
+int timeToInt(String textTime){
+  int hours = 0;
+  int minutes = 0;
+  
+  snprintf(buffer, sizeof(buffer), "%s", textTime);
+  sscanf(buffer, "%d:%d", &hours, &minutes);
+  
+  return ((hours * 100)+minutes);
+}
+
+
+
+
+
+
+
+/*==================================================================================================*/
+/*                                          MQTT functions                                          */
+
+void onMqttMessage(char *topic, char *payload, const AsyncMqttClientMessageProperties &properties, const size_t &len,
+                   const size_t &index, const size_t &total) {
+    (void) payload;
+
+    Serial.println("Publish received.");
+    Serial.print("  topic: ");
+    Serial.println(topic);
+    Serial.print("  qos: ");
+    Serial.println(properties.qos);
+    Serial.print("  dup: ");
+    Serial.println(properties.dup);
+    Serial.print("  retain: ");
+    Serial.println(properties.retain);
+    Serial.print("  len: ");
+    Serial.println(len);
+    Serial.print("  index: ");
+    Serial.println(index);
+    Serial.print("  total: ");
+    Serial.println(total);
+    Serial.print("  payload: ");
+    String payloadString = String(payload);
+    Serial.println(payloadString);
+
+    // Parse the received JSON message
+    StaticJsonDocument<200> doc; // Adjust the size according to your JSON message size
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    // Check for parsing errors
+    if (error) {
+      Serial.print("deserializeJson() failed: ");
+      Serial.println(error.c_str());
+      return;
+    }
+
+    if(strcmp(getTime("date").c_str(), doc["start"].as<String>().substring(0, 9).c_str())) return;
+    if(doc["res_name"].as<String>().substring(0) != DEVICE) return;
+
+    for(int i = 0; i < TIMESLOTS; i++){
+      if(!strcmp(doc["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
+        for(int j = 0; timeToInt(doc["finish"].as<String>().substring(11).c_str()) > timeToInt(timeSlot[i + j].c_str()) + 1; j++){
+          if(doc["deleted"] == false){  
+            reservations[i + j] = doc["full_name"].as<String>().substring(0);
+            booked[i + j] = true;
+          }
+          else booked[i + j] = false; 
+        }
+        break;
+      }
+    }
+
+    refreshScreen();
+}
+
+void connectToMqtt() {
+    Serial.println("Connecting to MQTT...");
+    mqttClient.connect();
+}
+
+void onMqttConnect(bool sessionPresent) {
+    Serial.print("Connected to MQTT broker: ");
+    Serial.print(MQTT_HOST);
+    Serial.print(", port: ");
+    Serial.println(MQTT_PORT);
+    Serial.print("PubTopic: ");
+    Serial.println(MQTT_TOPIC);
+
+    Serial.print("Session present: ");
+    Serial.println(sessionPresent);
+
+    uint16_t packetIdSub = mqttClient.subscribe(MQTT_TOPIC, 2);
+    Serial.print("Subscribing at QoS 2, packetId: ");
+    Serial.println(packetIdSub);
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+    (void) reason;
+
+    Serial.print("Disconnected from MQTT. Reason: ");
+    Serial.println((int) reason);
+
+
+    if (WiFi.isConnected()) {
+        mqttReconnectTimer.once(2, connectToMqtt);
+    }
+}
+
+void onMqttSubscribe(const uint16_t &packetId, const uint8_t &qos) {
+    Serial.println("Subscribe acknowledged.");
+    Serial.print("  packetId: ");
+    Serial.println(packetId);
+    Serial.print("  qos: ");
+    Serial.println(qos);
+}
+
+void onMqttUnsubscribe(const uint16_t &packetId) {
+    Serial.println("Unsubscribe acknowledged.");
+    Serial.print("  packetId: ");
+    Serial.println(packetId);
+}
+
+/*==================================================================================================*/
+
+
+
+
+
+
+
+/*==================================================================================================*/
+/*                                          Draw funtions                                           */
 
 /* Put text on one of the predefined lines */
 void drawOnLine(const char* text, int line, int postionOnLine){
@@ -139,8 +383,8 @@ void drawTimes(){
     drawOnLine(buffer, i, 0);
   }
 
-  drawOnLine("Einde laatste reservering", 18, 49);
-  drawOnLine("Sluiting Makerslab", 19, 49);
+  drawOnLine(" Einde laatste reservering", 18, 49);
+  drawOnLine(" Sluiting Makerslab", 19, 49);
 
   paint.SetWidth(24);
   paint.Clear(UNCOLORED);
@@ -152,69 +396,17 @@ void drawTimes(){
   epd.SetPartialWindow(paint.GetImage(), 351, 0, paint.GetWidth(), paint.GetHeight());
 }
 
-/* Function to perform HTTP GET request */
-String getReservationData() {
-  int httpResponseCode;
-  String payload = "0";
-
-  char address[BUFFER_SIZE];
-  snprintf(address, sizeof(address), "%s%s.json?api_key=%s&today=true&limit=%d", API_URL, SCHEDULE_ID, API_KEY, BOOKINGS);
-  
-  http.begin(client, address); // Initialize an HTTP request
-
-  httpResponseCode = http.GET(); // Send an HTTP GET request with data
-  payload = http.getString(); // Get the response from the server
-  http.end(); // Close the HTTP connection
-  return payload;
-}
-
-/* Put all the reservations on screen */
-void drawReservations(){ 
-  static int oldTimeslot;
-  int currentTimeslot = 0;
-
-  int currentTime = timeToInt(getTime("time"));
-  for(int i = 0; i < TIMESLOTS+1; i++){
-    currentTimeslot = i + 1;
-    if(currentTime >= timeToInt(timeSlot[i]) && currentTime <= (timeToInt(timeSlot[i + 1]) -1)) break;
-    currentTimeslot = 0;
-  }
-
-  if(oldTimeslot == currentTimeslot) return;
-
-  String reservationData = getReservationData();
-  oldTimeslot = currentTimeslot;
-
+void refreshScreen(){
   epd.Init();
   epd.ClearFrame();
   drawTimes();
 
-  DynamicJsonDocument doc(JSON_DOCUMENT_LENGTH);
-  DeserializationError error = deserializeJson(doc, reservationData);
-
-  if(error) return;
-    
-  JsonArray bookings = doc["bookings"];
-
-  if(bookings.size() == 0) return;
-
-  uint8_t booked[TIMESLOTS];
-  for(int i = 0; i < TIMESLOTS; i++) booked[i] = false;
-
-  for(JsonObject booking : bookings){
-    if(booking["res_name"].as<String>().substring(0) != DEVICE) continue;
-
-    for(int i = 0; i < TIMESLOTS; i++){
-      if(!strcmp(booking["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
-        for(int j = 0; timeToInt(booking["finish"].as<String>().substring(11).c_str()) > timeToInt(timeSlot[i + j].c_str()) + 1; j++){
-          drawOnLine(booking["full_name"].as<String>().substring(0).c_str(), i + j, 56);
-          booked[i] = true;
-        }
-        break;
-      }
+  for(int i = 0; i < TIMESLOTS; i++){
+    if(booked[i] == false){
+      drawOnLine("                                     ", i, 56);
+      continue;
     }
-    
-    yield();
+    drawOnLine(reservations[i].c_str(), i, 56);
   }
 
   paint.SetWidth(24);
@@ -241,33 +433,4 @@ void drawReservations(){
   epd.Sleep();
 }
 
-String getTime(String type){
-  int httpResponseCode;
-  String payload = "0";
-  
-  http.begin(client, TIME_API); // Initialize an HTTP request
-
-  httpResponseCode = http.GET(); // Send an HTTP GET request with data
-  payload = http.getString(); // Get the response from the server
-  http.end(); // Close the HTTP connection
-
-  DynamicJsonDocument doc(JSON_DOCUMENT_LENGTH);
-  DeserializationError error = deserializeJson(doc, payload);
-
-  if(error) return "0";
-
-  if(type == "time") snprintf(buffer, sizeof("00:00"), "%s", doc["datetime"].as<String>().substring(11).c_str());
-  else if(type == "day") snprintf(buffer, sizeof("0"), "%s", doc["day_of_week"].as<String>().c_str());
-
-  return buffer;
-}
-
-int timeToInt(String textTime){
-  int hours = 0;
-  int minutes = 0;
-  
-  snprintf(buffer, sizeof(buffer), "%s", textTime);
-  sscanf(buffer, "%d:%d", &hours, &minutes);
-
-  return ((hours * 100)+minutes);
-}
+/*==================================================================================================*/

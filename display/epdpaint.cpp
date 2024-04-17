@@ -148,6 +148,17 @@ void Paint::DrawPixel(int x, int y, int colored) {
  */
 void Paint::DrawCharAt(int x, int y, char ascii_char, sFONT* font, int colored) {
     int i, j;
+
+    if((int)ascii_char == (129 || 150 || 151 || 154 || 163)) ascii_char = 'u';
+    else if((int)ascii_char == (130 || 136 || 137 || 138 || 144)) ascii_char = 'e';
+    else if((int)ascii_char == (131 || 132 || 133 || 134 || 142 || 143 || 160)) ascii_char = 'a';
+    else if((int)ascii_char == (128 || 135)) ascii_char = 'c';
+    else if((int)ascii_char == (139 || 140 || 141 || 161)) ascii_char = 'i';
+    else if((int)ascii_char == 152) ascii_char = 'y';
+    else if((int)ascii_char == (164 || 165)) ascii_char = 'n';
+    else if((int)ascii_char == (147 || 148 || 149 || 153 || 162)) ascii_char = 'o';
+    else if((int)ascii_char > 126) ascii_char = '?';
+
     unsigned int char_offset = (ascii_char - ' ') * font->Height * (font->Width / 8 + (font->Width % 8 ? 1 : 0));
     const unsigned char* ptr = &font->table[char_offset];
 
