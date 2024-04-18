@@ -20,7 +20,7 @@
 #define UPDATE_TIME 60  /* Time between updates in seconds */
 
 #define SPLASH_HEADER   "Reserveringen"
-#define DEVICE          "RISO-printer"  /* Name of device (Make sure its the same as in the supersaas schedule) */
+#define DEVICE          "Laser 3 98 x 158 cm"  /* Name of device (Make sure its the same as in the supersaas schedule) */
 
 #define TIME_API        "https://worldtimeapi.org/api/timezone/Europe/Amsterdam"
 
@@ -254,8 +254,8 @@ void onMqttMessage(char *topic, char *payload, const AsyncMqttClientMessagePrope
       return;
     }
 
-    if(strcmp(getTime("date").c_str(), doc["start"].as<String>().substring(0, 9).c_str())) return;
-    if(doc["res_name"].as<String>().substring(0) != DEVICE) return;
+    if(!strcmp(getTime("date").c_str(), doc["start"].as<String>().substring(0, 9).c_str())) return;
+    if(doc["res_name"].as<String>().substring(0) != "Laser_3_98_x_158_cm") return;
 
     for(int i = 0; i < TIMESLOTS; i++){
       if(!strcmp(doc["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
