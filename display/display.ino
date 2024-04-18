@@ -20,7 +20,7 @@
 #define UPDATE_TIME 60  /* Time between updates in seconds */
 
 #define SPLASH_HEADER   "Reserveringen"
-#define DEVICE          "Laser 3 98 x 158 cm"  /* Name of device (Make sure its the same as in the supersaas schedule) */
+#define DEVICE          "Printer-snijplotter"  /* Name of device (Make sure its the same as in the supersaas schedule) */
 
 #define TIME_API        "https://worldtimeapi.org/api/timezone/Europe/Amsterdam"
 
@@ -111,6 +111,22 @@ void setup() {
 void loop() {
   saveReservations();
   delay(TO_SECONDS(UPDATE_TIME));
+}
+
+char* replaceSpacesWithUnderscores(const char *str) {
+    int len = strlen(str);
+    char *newStr = (char*)malloc((len + 1) * sizeof(char)); // Allocate memory for the new string
+    if (newStr == NULL) {
+        printf("Memory allocation failed.\n");
+        exit(1);
+    }
+    strcpy(newStr, str); // Copy the original string to the new string
+    for (int i = 0; i < len; i++) {
+        if (newStr[i] == ' ') {
+            newStr[i] = '_';
+        }
+    }
+    return newStr;
 }
 
 /* Function to perform HTTP GET request */
@@ -254,8 +270,10 @@ void onMqttMessage(char *topic, char *payload, const AsyncMqttClientMessagePrope
       return;
     }
 
+    char *newStr = replaceSpacesWithUnderscores(DEVICE);
+
     if(!strcmp(getTime("date").c_str(), doc["start"].as<String>().substring(0, 9).c_str())) return;
-    if(doc["res_name"].as<String>().substring(0) != "Laser_3_98_x_158_cm") return;
+    if(doc["res_name"].as<String>().substring(0) != newStr) return;
 
     for(int i = 0; i < TIMESLOTS; i++){
       if(!strcmp(doc["start"].as<String>().substring(11).c_str(), timeSlot[i].c_str())){
